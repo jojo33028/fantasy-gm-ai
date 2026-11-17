@@ -1,0 +1,17 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {parseCSV,totals,scoreMatchup,tradeImpact,formatStat,newWorkspace,validateWorkspace} from '../core.mjs';
+const rows='Guard,20,4,8,1,0.3,3,7,14,3,4,3\nCenter,12,11,2,0.8,2,0,5,6,2,4,1';
+test('percentages aggregate makes and attempts instead of player percentages',()=>{const t=totals(parseCSV(rows));assert.equal(t['FG%'],12/20);assert.equal(t['FT%'],5/8);assert.equal(t.AST,10);});
+test('weekly totals weight shooting attempts by expected active games',()=>{const p=parseCSV(rows);p[0].games=4;p[1].games=2;const t=totals(p,{weekly:true});assert.equal(t['FG%'],38/68);assert.equal(t.PTS,104);});
+test('missing values are unknown rather than zero; zero-attempt shooting is unknown',()=>{const p=parseCSV('Unmeasured player');assert.equal(totals(p).PTS,null);const z=parseCSV('Zero,0,0,0,0,0,0,0,0,0,0,0');assert.equal(totals(z).PTS,0);assert.equal(totals(z)['FG%'],null);});
+test('injured and IL players are excluded only from active projections',()=>{const p=parseCSV(rows);p[1].status='IL';assert.equal(totals(p,{activeOnly:true}).REB,4);assert.equal(totals(p).REB,15);});
+test('turnovers run in reverse and punted categories still count',()=>{const a={'FG%':.5,'FT%':.8,'3PM':5,PTS:100,REB:20,AST:10,STL:3,BLK:2,TOV:4};const b={...a,TOV:6,PTS:90};const s=scoreMatchup(a,b,['PTS']);assert.equal(s.wins,2);assert.equal(s.ties,7);assert.equal(s.rows.find(r=>r.cat==='PTS').punted,true);});
+test('floating point ties tolerate harmless rounding error',()=>{const s=scoreMatchup({AST:.1+.2},{AST:.3});assert.equal(s.rows.find(r=>r.cat==='AST').result,'tie');});
+test('trade recomputes shooting against the full retained roster',()=>{const p=parseCSV(rows),incoming=parseCSV('New,18,5,6,1,0.5,2,6,15,4,5,2');const r=tradeImpact(p,[p[0].id],incoming);assert.equal(r.after['FG%'],11/21);assert.equal(r.before['FG%'],12/20);assert.equal(r.slotChange,0);assert.ok(r.rows.find(r=>r.cat==='TOV').result==='win');});
+test('unequal trade counts expose the changed roster slots',()=>{const p=parseCSV(rows);assert.equal(tradeImpact(p,[p[0].id],parseCSV(rows)).slotChange,1);});
+test('CSV accepts quoted comma names and optional header',()=>{const p=parseCSV('Name,PTS,REB,AST,STL,BLK,3PM,FGM,FGA,FTM,FTA,TOV\n"Smith, Jr.",20,4,8,1,0,3,7,14,3,4,3');assert.equal(p[0].name,'Smith, Jr.');});
+test('CSV rejects impossible shooting and malformed stat cells',()=>{for(const text of ['', 'A,1,2','A,-1,0,0,0,0,0,0,0,0,0,0','A,20,4,8,1,0,9,7,14,3,4,3','A,20,4,8,1,0,3,17,14,3,4,3','A,Infinity,4,8,1,0,3,7,14,3,4,3'])assert.throws(()=>parseCSV(text));});
+test('percentage deltas use percentage points',()=>{assert.equal(formatStat(.02,'FT%',true),'+2.0 pp');assert.equal(formatStat(.5,'FG%'),'50.0%');});
+test('backup restores complete workspace and rejects invalid data',()=>{const d=newWorkspace();d.players=parseCSV(rows);d.punts=['FT%'];assert.deepEqual(validateWorkspace(d),d);d.players[0].stats.pts=-1;assert.throws(()=>validateWorkspace(d));});
+test('backup rejects duplicate IDs and out-of-range percentage totals',()=>{const d=newWorkspace();d.players=parseCSV(rows);d.players[1].id=d.players[0].id;assert.throws(()=>validateWorkspace(d));d.players=[];d.matchup.mine['FG%']=8;assert.throws(()=>validateWorkspace(d));});
